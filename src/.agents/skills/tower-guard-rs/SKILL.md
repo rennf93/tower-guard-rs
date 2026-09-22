@@ -1,71 +1,62 @@
 ---
 name: tower-guard-rs
-description: Use when working in tower-guard-rs (github.com/rennf93/tower-guard-rs), the generic tower::Layer/Service adapter for the guard-core-rs detection engine: editing this crate, planning or reviewing the middleware implementation, wiring guard-core-rs into tower-based stacks (axum, hyper, warp), or answering questions about the repository's status. The repo is currently a 14-line cargo new scaffold with zero dependencies (not even tower or tokio), no engine integration, and no CI that compiles code; everything here must be described as roadmap, not reality.
+description: Use when working in the tower-guard-rs Rust crate (github.com/rennf93/tower-guard-rs): editing the tower Layer/Service security middleware, adding or changing engine view mapping (url_path/query_param/header/request_body), changing the request body buffering cap or the 403/413/500 fail-secure response translation, wiring the guard-core-rs engine dependency (path vs versioned, CI checkout), or answering questions about what the adapter inspects and blocks. Covers CI-verified cargo commands, the EXCLUDED_HEADERS policy, and the cfg(test) detector seam for panic-recovery tests.
 ---
 
 # tower-guard-rs
 
-Reserved namespace for the generic tower adapter of the Guard ecosystem. Currently a scaffold: `src/lib.rs` is the stock 14-line `cargo new` stub, `Cargo.toml` has no dependencies, and no CI compiles anything.
+Framework-agnostic `tower` adapter for the Guard ecosystem. `GuardLayer` + `GuardService` screen `http::Request` traffic through the `guard-core-engine` detection engine and short-circuit with a `403`/`413`/`500` when needed. No security logic lives here.
 
 ## Quick Reference
 
-- Status: scaffold, implementation pending. Version 0.0.1, edition 2024, MIT, not published.
-- Engine: [guard-core-rs](https://github.com/rennf93/guard-core-rs) (itself pre-1.0).
-- Planned as the generic foundation for tower-based stacks (axum, hyper, warp); axum-guard-rs may become a thin convenience over it.
-- This adapter holds framework glue only; all security logic belongs in the engine.
-
-## Installation
-
-Not published to crates.io and not usable. To work on the source:
-
 ```bash
-git clone https://github.com/rennf93/tower-guard-rs
-cd tower-guard-rs
-```
-
-## Setup
-
-- Any recent stable Rust (1.85+, edition 2024). No rust-toolchain.toml, no pre-commit config.
-- No Makefile and no CI: commands below are the working baseline, and the contribution checklist inside `.github/workflows/greetings.yml` states the intended bar (fmt, clippy `-D warnings`, tests, docs build) that nothing enforces yet.
-
-## Status
-
-What exists: one 14-line stub with an `add()` function and one unit test, automation workflows (greetings, labeler, stale, summary, sync-labels), MIT license, README marked "Reserved namespace. Implementation pending."
-
-What does not exist: any tower, tokio, or guard-core-rs dependency, any `Layer`/`Service` code, any configuration type, any real tests, any CI that compiles the crate. Do not describe this crate as functional, integrated, or published.
-
-## Intended Integration
-
-Roadmap, not reality:
-
-1. Depend on `guard-core-rs` (facade re-exporting `compiler`, `preprocessor`, `semantic`), `tower`, and `http` types.
-2. Implement `tower::Layer` producing a `GuardService<S>` wrapping the inner service; inspect each request before forwarding.
-3. Per request: extract method, path, headers, client IP, and body; call the engine synchronously (it is CPU-bound, no I/O, no tokio, safe inside `call` without spawning); short-circuit with a 403 response on a threat verdict.
-4. Rate limiting, Redis, IP intelligence, and event dispatch are out of scope: they are later sections of the reference spec and not in the engine at 0.0.1.
-5. Configuration waits for a config surface in guard-core-rs (reference spec section 02, not yet ported).
-
-Engine honesty constraint: the engine lacks the 4.x pattern-table scan stage, so any integration today is partial; design notes must say so.
-
-## Development Commands
-
-```bash
-cargo build
-cargo test
+# A sibling guard-core-rs checkout at ../guard-core-rs is required.
+cargo check --all-targets
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets -- -D warnings   # pedantic is warn, so this enforces it
+cargo test                                  # 12 unit + 13 integration + 3 doctests
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
+
+## Public API
+
+- `GuardLayer::new(DetectConfig)`, `GuardLayer::with_defaults()`, `GuardLayer::with_body_cap(usize)`. Implements `tower::Layer<S>` -> `GuardService<S>`.
+- `GuardService<S>` implements `tower::Service<Request<B>>` with `Response = Response<GuardBody<B2>>` and `Error = S::Error`. Requires `S: Service<Request<B>, Response = Response<B2>> + Clone + Send + 'static`, `B: Body<Data = Bytes> + Unpin + Send + 'static + From<Bytes>`, `B2: Body<Data = Bytes> + Unpin + Send + 'static`.
+- `default_config() -> DetectConfig` pins the ecosystem defaults because the engine's `DetectConfig` has no `Default`: `max_content_length` 10 000, `max_full_scan_bytes` 262 144, `preserve_attack_patterns` true, `semantic_threshold` 0.7, `threat_score_threshold` 1.0.
+- `BLOCKED_MESSAGE` / `OVERSIZE_MESSAGE` / `FAILURE_MESSAGE` are the public detail strings; `GuardBody<B>` is `Passthrough(B) | Generated(Full<Bytes>)`.
+
+## Engine Mapping
+
+`guard_core_engine::detect::detect(content, request_context, config) -> DetectVerdict` is called once per view:
+
+| Request part | Context |
+|---|---|
+| `uri.path()` (not `/`) | `url_path` |
+| `uri.query()` (non-empty) | `query_param` |
+| header value (name not excluded) | `header` |
+| buffered body (non-empty) | `request_body` |
+
+`DetectVerdict` carries `is_threat`/`threat_score`/`threats` and no response shape; the response translation is adapter-side in `src/response.rs`.
+
+## Behavior Contracts
+
+- Block: `403` + `{"detail":"Suspicious activity detected"}`.
+- Oversize body: `413` + `{"detail":"Payload too large"}`. Cap defaults to `max_full_scan_bytes`; oversize is rejected, never passed unscanned.
+- Body read error or engine panic: `500` + `{"detail":"Security check failed"}`. Fail-secure, unlike the TypeScript adapters which fail open.
+- `EXCLUDED_HEADERS` (never scanned): `host`, `user-agent`, `accept`, `accept-encoding`, `connection`, `origin`, `referer`, plus every `sec-*` header. Mirrors `guard-core-ts`.
+- Method is not scanned (the engine has no method parameter). Non-UTF-8 header values are skipped.
+- The inner service is cloned into the request future, so `S: Clone` is required (axum's `Route` and every framework service satisfy this).
+- The request future is boxed per request (`Pin<Box<dyn Future + Send>>`), one allocation; the body is re-emitted as `B::from(Bytes)` after buffering.
 
 ## Footguns
 
-- **Do not add security logic here**: detection belongs in guard-core-rs; this crate is glue only.
-- **Do not build on the stub**: `add()` is `cargo new` boilerplate to be replaced, not an API to extend.
-- **Do not claim integration or parity**: the engine has no pattern-table scan stage and no config/handler sections yet; never describe this adapter as protecting anything.
-- **No CI exists**: nothing validates changes; run the commands above manually.
-- **Edition 2024** requires Rust 1.85+; older toolchains fail to build the stub.
+- `panic = "abort"` disables the `catch_unwind` recovery; the process dies before the `500` can be returned. Documented, not mitigated.
+- The panic test relies on `#[cfg(test)] GuardLayer::with_detect_fn`. It does not exist in production builds; do not make it public.
+- `axum::body::Body` implements `From<Bytes>` but not `From<Full<Bytes>>`. That is why the rebuild bound is `From<Bytes>`; do not "simplify" it back.
+- The engine dependency is a path dependency (`../guard-core-rs/crates/guard-core-engine`) with a `TODO(engine)` to move to the versioned crate. CI checks out `rennf93/guard-core-rs@master` into place. The facade crate `guard-core-rs` is NOT used because it does not re-export `detect`.
+- Payloads in tests must come from the spec 4.0.2 corpus (`guard-core-rs/conformance/guard-core-spec-4.0.2/cases/`) so they are guaranteed threats.
 
-## Related Projects
+## Related
 
-- [guard-core-rs](https://github.com/rennf93/guard-core-rs): the engine (pre-1.0, work in progress).
-- Sibling adapters: [axum-guard-rs](https://github.com/rennf93/axum-guard-rs), [actix-guard-rs](https://github.com/rennf93/actix-guard-rs), [rocket-guard-rs](https://github.com/rennf93/rocket-guard-rs).
-- [guard-core](https://github.com/rennf93/guard-core): Python reference implementation (spec 4.0.2).
-- [fastapi-guard](https://github.com/rennf93/fastapi-guard): most mature ecosystem adapter; reference for feature coverage.
+- `axum-guard-rs`: axum wrapper (`with_guard`) over this crate.
+- `guard-core-rs`: the engine. Engine behavior changes belong there, not here.
