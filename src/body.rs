@@ -1,0 +1,122 @@
+//! The response body type emitted by [`GuardService`](crate::GuardService).
+
+use bytes::Bytes;
+use http_body::{Body, Frame, SizeHint};
+use http_body_util::Full;
+use std::error::Error;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+/// Boxed error type used by [`GuardBody`].
+///
+/// Identical to `tower::BoxError`; redefined here so the body type does not
+/// force a `tower` re-export onto downstream type signatures.
+pub type BoxError = Box<dyn Error + Send + Sync>;
+
+/// Response body produced by [`GuardService`](crate::GuardService).
+///
+/// Either the inner service's response body, forwarded untouched, or a
+/// Guard-generated JSON body for a short-circuited response (`403`, `413`, or
+/// `500`). This type is nameable because it appears in
+/// `<GuardService<S> as Service<Request<B>>>::Response`.
+#[derive(Debug)]
+pub enum GuardBody<B> {
+    /// The inner service's response body, forwarded untouched.
+    Passthrough(B),
+    /// A Guard-generated JSON body.
+    Generated(Full<Bytes>),
+}
+
+impl<B> Body for GuardBody<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: Into<BoxError>,
+{
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        // `Self: Unpin` holds because both variants hold `Unpin` bodies, so
+        // `get_mut` is enough; no pin projection required.
+        match self.get_mut() {
+            Self::Passthrough(inner) => Pin::new(inner).poll_frame(cx).map_err(Into::into),
+            Self::Generated(body) => Pin::new(body).poll_frame(cx).map_err(Into::into),
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        match self {
+            Self::Passthrough(inner) => inner.is_end_stream(),
+            Self::Generated(body) => body.is_end_stream(),
+        }
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        match self {
+            Self::Passthrough(inner) => inner.size_hint(),
+            Self::Generated(body) => body.size_hint(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::convert::Infallible;
+    use std::task::Waker;
+
+    /// A minimal body for exercising the passthrough variant.
+    #[derive(Debug)]
+    struct CopyBody(Full<Bytes>);
+
+    impl Body for CopyBody {
+        type Data = Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            Pin::new(&mut self.0).poll_frame(cx)
+        }
+
+        fn is_end_stream(&self) -> bool {
+            self.0.is_end_stream()
+        }
+
+        fn size_hint(&self) -> SizeHint {
+            self.0.size_hint()
+        }
+    }
+
+    fn poll_once<B>(body: &mut B) -> Option<Result<Frame<Bytes>, BoxError>>
+    where
+        B: Body<Data = Bytes, Error: Into<BoxError>> + Unpin,
+    {
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        match Body::poll_frame(Pin::new(body), &mut cx) {
+            Poll::Ready(frame) => frame.map(|frame| frame.map_err(Into::into)),
+            Poll::Pending => panic!("expected a ready frame"),
+        }
+    }
+
+    #[test]
+    fn passthrough_forwards_frames_untouched() {
+        let mut body = GuardBody::Passthrough(CopyBody(Full::new(Bytes::from_static(b"ok"))));
+        let frame = poll_once(&mut body).expect("frame").expect("data");
+        assert_eq!(frame.into_data().expect("data"), &b"ok"[..]);
+    }
+
+    #[test]
+    fn generated_yields_the_static_body() {
+        let mut body: GuardBody<Full<Bytes>> =
+            GuardBody::Generated(Full::new(Bytes::from_static(b"blocked")));
+        let frame = poll_once(&mut body).expect("frame").expect("data");
+        assert_eq!(frame.into_data().expect("data"), &b"blocked"[..]);
+        assert!(body.is_end_stream());
+    }
+}
