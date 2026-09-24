@@ -2,7 +2,7 @@
 
 Application-layer security middleware for [tower](https://github.com/tower-rs/tower)-based services, powered by the [guard-core-rs](https://github.com/rennf93/guard-core-rs) detection engine. Part of the [guard ecosystem](https://github.com/rennf93).
 
-Docs: https://rennf93.github.io/tower-guard-rs/
+Docs: <https://rennf93.github.io/tower-guard-rs/>
 
 Works with any framework built on `tower::Service`, including [axum](https://github.com/tokio-rs/axum) (see [axum-guard-rs](https://github.com/rennf93/axum-guard-rs)), [hyper](https://github.com/hyperium/hyper), and [warp](https://github.com/seanmonstar/warp).
 
