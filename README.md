@@ -2,17 +2,19 @@
 
 Application-layer security middleware for [tower](https://github.com/tower-rs/tower)-based services, powered by the [guard-core-rs](https://github.com/rennf93/guard-core-rs) detection engine. Part of the [guard ecosystem](https://github.com/rennf93).
 
+Docs: https://rennf93.github.io/tower-guard-rs/
+
 Works with any framework built on `tower::Service`, including [axum](https://github.com/tokio-rs/axum) (see [axum-guard-rs](https://github.com/rennf93/axum-guard-rs)), [hyper](https://github.com/hyperium/hyper), and [warp](https://github.com/seanmonstar/warp).
 
-**Status:** Implemented, version 0.1.0. `GuardLayer` and `GuardService` are working `tower` middleware over `http::Request<B>`, screened by the engine. Not yet published to crates.io: the engine is a local path dependency for now (see [Engine dependency](#engine-dependency)).
+**Status:** Released. Version 1.0.0, published to crates.io. `GuardLayer` and `GuardService` are working `tower` middleware over `http::Request<B>`, screened by the engine.
 
 ## About
 
 The guard ecosystem provides application-layer API security middleware across multiple languages and frameworks:
 
-- **Python**: [fastapi-guard](https://github.com/rennf93/fastapi-guard), [flaskapi-guard](https://github.com/rennf93/flaskapi-guard), [dj-api-guard](https://github.com/rennf93/dj-api-guard), [tornado-api-guard](https://github.com/rennf93/tornado-api-guard)
+- **Python**: [fastapi-guard](https://github.com/rennf93/fastapi-guard), [flaskapi-guard](https://github.com/rennf93/flaskapi-guard), [djapi-guard](https://github.com/rennf93/djapi-guard), [tornadoapi-guard](https://github.com/rennf93/tornadoapi-guard)
 - **TypeScript**: guard-core-ts with adapters for Express, Fastify, Hono, NestJS
-- **Rust**: [guard-core-rs](https://github.com/rennf93/guard-core-rs) with adapters for tower (this repo), [axum](https://github.com/rennf93/axum-guard-rs), actix-web, and rocket
+- **Rust**: [guard-core-rs](https://github.com/rennf93/guard-core-rs) with adapters for tower (this repo), [axum](https://github.com/rennf93/axum-guard-rs), [actix-web](https://github.com/rennf93/actix-guard-rs), and [rocket](https://github.com/rennf93/rocket-guard-rs)
 
 Per the ecosystem boundary rules, this crate holds framework glue only: every detection decision comes from the engine.
 
@@ -67,7 +69,7 @@ A body larger than the cap is rejected with `413` rather than forwarded unscanne
 
 ## Engine dependency
 
-The engine is consumed as a local path dependency on the `guard-core-rs` workspace (`../guard-core-rs/crates/guard-core-engine`), because `guard-core-rs` has no tagged crates.io release yet. CI checks out `rennf93/guard-core-rs` (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)), mirroring the sibling adapter pattern in `laravel-guard`/`symfony-guard`. **TODO:** switch to the versioned crate once the engine is tagged and published.
+The Cargo.toml pins `guard-core-engine` 4.0.4, published to crates.io, and also carries a path pointing at the engine crate inside a sibling `guard-core-rs` checkout (`../guard-core-rs/crates/guard-core-engine`) so local builds and CI compile the engine from source; consumers installing the crate from the registry resolve the engine normally. CI checks out `rennf93/guard-core-rs` (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)), mirroring the sibling adapter pattern in `laravel-guard`/`symfony-guard`.
 
 The engine crate is `guard-core-engine` rather than the `guard-core-rs` facade because the facade currently re-exports only `compiler`, `preprocessor`, and `semantic`; `detect` (the entry point this adapter uses) is not re-exported there yet.
 
