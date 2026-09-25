@@ -258,10 +258,7 @@ mod tests {
 
         let response = service.oneshot(request).await.expect("response");
         assert_eq!(response.status(), 500);
-        assert_eq!(
-            body_text(response).await,
-            format!(r#"{{"detail":"{FAILURE_MESSAGE}"}}"#)
-        );
+        assert_eq!(body_text(response).await, FAILURE_MESSAGE);
     }
 
     #[tokio::test]
@@ -306,10 +303,7 @@ mod tests {
             .expect("request");
         let response = service.oneshot(request).await.expect("response");
         assert_eq!(response.status(), 403);
-        assert_eq!(
-            body_text(response).await,
-            format!(r#"{{"detail":"{BLOCKED_MESSAGE}"}}"#)
-        );
+        assert_eq!(body_text(response).await, BLOCKED_MESSAGE);
     }
 
     #[test]
