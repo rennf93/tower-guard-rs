@@ -814,8 +814,8 @@ appears in the service's <code>Response</code> association:</p>
 <span class="p">}</span>
 </code></pre></div>
 <p>Either the inner service's response body, forwarded untouched (<code>Passthrough</code>),
-or a Guard-generated JSON body for a short-circuited response (<code>403</code>, <code>413</code>,
-or <code>500</code>, <code>Generated</code>). It implements <code>http_body::Body</code>.</p>
+or a Guard-generated plain-text body for a short-circuited response (<code>403</code>,
+<code>413</code>, or <code>500</code>, <code>Generated</code>). It implements <code>http_body::Body</code>.</p>
 <h3 id="boxerror"><code>BoxError</code></h3>
 <p><code>Box&lt;dyn Error + Send + Sync&gt;</code>, the boxed error type used by <code>GuardBody</code>.
 Identical to <code>tower::BoxError</code>; redefined so the body type does not force a
@@ -939,17 +939,17 @@ Identical to <code>tower::BoxError</code>; redefined so the body type does not f
 <tr>
 <td>Engine flags a view</td>
 <td><code>403 Forbidden</code></td>
-<td><code>{"detail":"Suspicious activity detected"}</code></td>
+<td><code>Suspicious activity detected</code></td>
 </tr>
 <tr>
 <td>Body exceeds the cap</td>
 <td><code>413 Payload Too Large</code></td>
-<td><code>{"detail":"Payload too large"}</code></td>
+<td><code>Payload too large</code></td>
 </tr>
 <tr>
 <td>Body read error or engine panic</td>
 <td><code>500 Internal Server Error</code></td>
-<td><code>{"detail":"Security check failed"}</code></td>
+<td><code>Security check failed</code></td>
 </tr>
 </tbody>
 </table>
