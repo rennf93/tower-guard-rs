@@ -40,9 +40,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 
 ## Behavior Contracts
 
-- Block: `403` + `{"detail":"Suspicious activity detected"}`.
-- Oversize body: `413` + `{"detail":"Payload too large"}`. Cap defaults to `max_full_scan_bytes`; oversize is rejected, never passed unscanned.
-- Body read error or engine panic: `500` + `{"detail":"Security check failed"}`. Fail-secure, unlike the TypeScript adapters which fail open.
+- Block: `403` + `Suspicious activity detected`.
+- Oversize body: `413` + `Payload too large`. Cap defaults to `max_full_scan_bytes`; oversize is rejected, never passed unscanned.
+- Body read error or engine panic: `500` + `Security check failed`. Fail-secure, unlike the TypeScript adapters which fail open.
 - `EXCLUDED_HEADERS` (never scanned): `host`, `user-agent`, `accept`, `accept-encoding`, `connection`, `origin`, `referer`, plus every `sec-*` header. Mirrors `guard-core-ts`.
 - Method is not scanned (the engine has no method parameter). Non-UTF-8 header values are skipped.
 - The inner service is cloned into the request future, so `S: Clone` is required (axum's `Route` and every framework service satisfy this).

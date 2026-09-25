@@ -15,50 +15,70 @@ pub const OVERSIZE_MESSAGE: &str = "Payload too large";
 pub const FAILURE_MESSAGE: &str = "Security check failed";
 
 pub(crate) fn blocked() -> Response<Full<Bytes>> {
-    json(StatusCode::FORBIDDEN, BLOCKED_MESSAGE)
+    plain_text(StatusCode::FORBIDDEN, BLOCKED_MESSAGE)
 }
 
 pub(crate) fn oversize() -> Response<Full<Bytes>> {
-    json(StatusCode::PAYLOAD_TOO_LARGE, OVERSIZE_MESSAGE)
+    plain_text(StatusCode::PAYLOAD_TOO_LARGE, OVERSIZE_MESSAGE)
 }
 
 pub(crate) fn failure() -> Response<Full<Bytes>> {
-    json(StatusCode::INTERNAL_SERVER_ERROR, FAILURE_MESSAGE)
+    plain_text(StatusCode::INTERNAL_SERVER_ERROR, FAILURE_MESSAGE)
 }
 
-/// The ecosystem's JSON error shape: a `detail` field, `application/json`.
-fn json(status: StatusCode, detail: &'static str) -> Response<Full<Bytes>> {
-    let body = Bytes::from(format!(r#"{{"detail":"{detail}"}}"#));
+/// The ecosystem's error shape: the bare message as the body,
+/// `text/plain; charset=utf-8` (same as the Python family).
+fn plain_text(status: StatusCode, message: &'static str) -> Response<Full<Bytes>> {
     Response::builder()
         .status(status)
-        .header(CONTENT_TYPE, "application/json")
-        .body(Full::new(body))
+        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Full::new(Bytes::from_static(message.as_bytes())))
         .expect("static status and header values are always valid")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http_body_util::BodyExt;
 
-    #[test]
-    fn blocked_response_shape() {
+    async fn body_bytes<B>(body: B) -> Bytes
+    where
+        B: http_body::Body<Data = Bytes> + Unpin,
+        B::Error: std::fmt::Debug,
+    {
+        body.collect().await.expect("body").to_bytes()
+    }
+
+    #[tokio::test]
+    async fn blocked_response_shape() {
         let response = blocked();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get(CONTENT_TYPE).expect("content type"),
-            "application/json"
+            "text/plain; charset=utf-8"
         );
+        assert_eq!(body_bytes(response.into_body()).await, BLOCKED_MESSAGE);
     }
 
-    #[test]
-    fn oversize_response_shape() {
+    #[tokio::test]
+    async fn oversize_response_shape() {
         let response = oversize();
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).expect("content type"),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(body_bytes(response.into_body()).await, OVERSIZE_MESSAGE);
     }
 
-    #[test]
-    fn failure_response_shape() {
+    #[tokio::test]
+    async fn failure_response_shape() {
         let response = failure();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).expect("content type"),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(body_bytes(response.into_body()).await, FAILURE_MESSAGE);
     }
 }
