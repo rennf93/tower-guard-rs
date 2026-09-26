@@ -4,6 +4,8 @@ use crate::GuardLayer;
 use crate::body::{BoxError, GuardBody};
 use crate::response;
 use bytes::{Bytes, BytesMut};
+use guard_core_engine::body_scan::extract_body_scan_values;
+use http::header::CONTENT_TYPE;
 use http::request::Parts;
 use http::{Request, Response};
 use http_body::Body;
@@ -202,12 +204,42 @@ fn scan_views(parts: &Parts, body: Option<&Bytes>, layer: &GuardLayer) -> bool {
     }
 
     if let Some(bytes) = body {
-        let text = String::from_utf8_lossy(bytes);
-        if !text.trim().is_empty() && flagged(layer, &text, "request_body") {
+        // Content-type routing (urlencoded fields, multipart parts, JSON
+        // walks, blob fallback) happens in the engine; every extracted value
+        // is scanned with its reference context instead of the lossy
+        // whole-body blob.
+        let content_type = parts
+            .headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok());
+        if body_flagged(layer, content_type, bytes) {
             return true;
         }
     }
 
+    false
+}
+
+/// Scan the buffered request body through the engine's body-value extraction
+/// (`request_body` view).
+///
+/// Every extracted value goes through the normal detect path with the context
+/// label the reference engine scans it under (`request_body:form_field`,
+/// `request_body:multipart_field`, `:embedded_json` leaves, ...); the first
+/// threat wins. A value with a forced category (a JSON mongo operator key the
+/// reference reports straight from the JSON walk) is a threat outright. An
+/// empty (or whitespace-only) body is not scanned, mirroring the previous
+/// behavior.
+fn body_flagged(layer: &GuardLayer, content_type: Option<&str>, bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bytes);
+    if text.trim().is_empty() {
+        return false;
+    }
+    for value in extract_body_scan_values(&text, content_type.unwrap_or(""), layer.config()) {
+        if value.forced_category.is_some() || flagged(layer, &value.content, &value.context) {
+            return true;
+        }
+    }
     false
 }
 
@@ -323,5 +355,153 @@ mod tests {
         for name in ["cookie", "authorization", "content-type", "x-api-key"] {
             assert!(!is_excluded_header(name), "{name} should be scanned");
         }
+    }
+
+    // --- body-value extraction through the full service ---
+
+    fn body_bytes(const_bytes: &[u8]) -> Full<Bytes> {
+        Full::new(Bytes::copy_from_slice(const_bytes))
+    }
+
+    async fn status_for(request: Request<Full<Bytes>>) -> http::StatusCode {
+        let service = GuardLayer::new(default_config()).layer(tower::service_fn(
+            |_request: Request<Full<Bytes>>| async {
+                Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"ok"))))
+            },
+        ));
+        service.oneshot(request).await.expect("response").status()
+    }
+
+    #[tokio::test]
+    async fn sqli_in_a_form_field_is_blocked() {
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/submit")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body_bytes(b"q=1+OR+1%3D1"))
+            .expect("request");
+        assert_eq!(status_for(request).await, http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn backslash_probe_in_a_form_field_is_blocked_through_the_raw_view() {
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/submit")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body_bytes(b"q=\\default"))
+            .expect("request");
+        assert_eq!(
+            status_for(request).await,
+            http::StatusCode::FORBIDDEN,
+            "\\default in a form field must stay a recon probe"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_binary_island_smuggling_is_not_blocked() {
+        // A binary-dense file part whose only printable fragment is shorter
+        // than the minimum island run: no detection, request forwarded.
+        let noise = noise_bytes(11, 4096);
+        let mut body = Vec::new();
+        body.extend_from_slice(b"--B0\r\nContent-Disposition: form-data; name=\"upload\"; filename=\"installer.zip\"\r\n\r\n");
+        body.extend_from_slice(&noise);
+        body.extend_from_slice(b"\x001 OR 1=1\x00");
+        body.extend_from_slice(b"\r\n--B0--\r\n");
+
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/upload")
+            .header("content-type", "multipart/form-data; boundary=B0")
+            .body(body_bytes(&body))
+            .expect("request");
+        assert_eq!(
+            status_for(request).await,
+            http::StatusCode::OK,
+            "the compressed fragment must not pattern-match"
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_multipart_text_part_with_script_is_blocked() {
+        let body = "--B0\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\n<script>alert(1)</script>\r\n--B0--\r\n";
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/upload")
+            .header("content-type", "multipart/form-data; boundary=B0")
+            .body(body_bytes(body.as_bytes()))
+            .expect("request");
+        assert_eq!(status_for(request).await, http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn multipart_binary_upload_with_embedded_script_is_blocked() {
+        let noise = noise_bytes(12, 4096);
+        let mut body = Vec::new();
+        body.extend_from_slice(b"--B0\r\nContent-Disposition: form-data; name=\"upload\"; filename=\"page.html.bin\"\r\n\r\n");
+        body.extend_from_slice(&noise);
+        body.extend_from_slice(b"\x00<script>alert(1)</script>\x00");
+        body.extend_from_slice(&noise_bytes(13, 4096));
+        body.extend_from_slice(b"\r\n--B0--\r\n");
+
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/upload")
+            .header("content-type", "multipart/form-data; boundary=B0")
+            .body(body_bytes(&body))
+            .expect("request");
+        assert_eq!(
+            status_for(request).await,
+            http::StatusCode::FORBIDDEN,
+            "the intact script island must detect"
+        );
+    }
+
+    #[tokio::test]
+    async fn embedded_json_leaf_attack_is_blocked() {
+        let body = r#"data={"a":"<script>alert(1)</script>"}"#;
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/submit")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body_bytes(body.as_bytes()))
+            .expect("request");
+        assert_eq!(status_for(request).await, http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn mongo_operator_key_body_is_blocked() {
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(body_bytes(br#"{"$where": "1 OR 1=1"}"#))
+            .expect("request");
+        assert_eq!(status_for(request).await, http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn benign_multipart_upload_is_forwarded() {
+        let body = "--B0\r\nContent-Disposition: form-data; name=\"upload\"; filename=\"notes.txt\"\r\n\r\nhello world\r\n--B0--\r\n";
+        let request = Request::builder()
+            .method(http::Method::POST)
+            .uri("/upload")
+            .header("content-type", "multipart/form-data; boundary=B0")
+            .body(body_bytes(body.as_bytes()))
+            .expect("request");
+        assert_eq!(status_for(request).await, http::StatusCode::OK);
+    }
+
+    /// Deterministic pseudo-random bytes: the binary-dense fixture.
+    fn noise_bytes(seed: u64, size: usize) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).max(1);
+        let mut out = Vec::with_capacity(size);
+        for _ in 0..size {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            out.push(u8::try_from(state % 256).expect("value below 256"));
+        }
+        out
     }
 }

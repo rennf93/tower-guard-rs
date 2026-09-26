@@ -27,7 +27,7 @@
 //! | Path | `url_path` | Skipped for `/` |
 //! | Query string | `query_param` | Skipped when empty |
 //! | Header values | `header` | Skips `sec-*` and hop-by-hop/negotiation headers (see `EXCLUDED_HEADERS`) |
-//! | Body | `request_body` | Buffered first, capped (see below) |
+//! | Body | `request_body` | Buffered first, capped (see below); routed by content type, so urlencoded fields, multipart parts, and JSON bodies are extracted into the values the reference engine scans individually instead of one whole-body blob |
 //!
 //! The HTTP method is not fed to the engine: the engine's `detect` signature
 //! takes content plus a context, and the reference adapters do not scan the
@@ -127,6 +127,7 @@ pub use crate::service::GuardService;
 /// | `preserve_attack_patterns` | `true` |
 /// | `semantic_threshold` | `0.7` |
 /// | `threat_score_threshold` | `1.0` |
+/// | `binary_min_run_length` | `16` |
 ///
 /// # Example
 ///
@@ -143,6 +144,7 @@ pub const fn default_config() -> DetectConfig {
         preserve_attack_patterns: true,
         semantic_threshold: 0.7,
         threat_score_threshold: 1.0,
+        binary_min_run_length: 16,
     }
 }
 
@@ -249,6 +251,7 @@ mod tests {
         assert!(config.preserve_attack_patterns);
         assert!((config.semantic_threshold - 0.7).abs() < f64::EPSILON);
         assert!((config.threat_score_threshold - 1.0).abs() < f64::EPSILON);
+        assert_eq!(config.binary_min_run_length, 16);
     }
 
     #[test]
