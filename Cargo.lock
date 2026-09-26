@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "guard-core-engine"
-version = "4.0.4"
+version = "4.1.0"
 dependencies = [
  "html-escape",
  "lru",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "tower-guard-rs"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "bytes",
  "guard-core-engine",
