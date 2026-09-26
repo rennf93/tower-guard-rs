@@ -5,7 +5,7 @@ use http::header::{CONTENT_TYPE, RETRY_AFTER};
 use http::{Response, StatusCode};
 use http_body_util::Full;
 
-/// Detail message carried by the `403 Forbidden` block response.
+/// Detail message carried by the `400 Bad Request` block response.
 pub const BLOCKED_MESSAGE: &str = "Suspicious activity detected";
 
 /// Detail message carried by the IP gate's `403 Forbidden` response.
@@ -28,7 +28,7 @@ pub const OVERSIZE_MESSAGE: &str = "Payload too large";
 pub const FAILURE_MESSAGE: &str = "Security check failed";
 
 pub(crate) fn blocked() -> Response<Full<Bytes>> {
-    plain_text(StatusCode::FORBIDDEN, BLOCKED_MESSAGE)
+    plain_text(StatusCode::BAD_REQUEST, BLOCKED_MESSAGE)
 }
 
 pub(crate) fn forbidden() -> Response<Full<Bytes>> {
@@ -90,7 +90,7 @@ mod tests {
     #[tokio::test]
     async fn blocked_response_shape() {
         let response = blocked();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             response.headers().get(CONTENT_TYPE).expect("content type"),
             "text/plain; charset=utf-8"

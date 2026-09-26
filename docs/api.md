@@ -72,7 +72,7 @@ known-friendly automation (monitoring probes, VPN egress, a partner's
 server), not immunity: it sets the same skip state a whitelist match sets but
 never adds a deny path, and it never opens the whitelist gate. The blacklist,
 route rules, and detection still apply to exempt IPs - an attack payload from
-an exempt IP is still `403 Suspicious activity detected`. The Rust family
+an exempt IP is still `400 Suspicious activity detected`. The Rust family
 ships no rate limiter, user-agent filter, cloud-provider blocker, or
 violation counter yet; a stage that lands later must skip exactly what the
 reference skips for a whitelist match (`is_whitelisted || is_exempt`) and
@@ -100,8 +100,8 @@ pub enum GuardBody<B> {
 ```
 
 Either the inner service's response body, forwarded untouched (`Passthrough`),
-or a Guard-generated plain-text body for a short-circuited response (`403`,
-`413`, or `500`, `Generated`). It implements `http_body::Body`.
+or a Guard-generated plain-text body for a short-circuited response (`400`,
+`403`, `413`, `429`, or `500`, `Generated`). It implements `http_body::Body`.
 
 ### `BoxError`
 
@@ -155,7 +155,7 @@ The HTTP method is not scanned.
 | Situation | Status | Body |
 |---|---|---|
 | The IP gate denies the client IP | `403 Forbidden` | `Forbidden` |
-| Engine flags a view | `403 Forbidden` | `Suspicious activity detected` |
+| Engine flags a view | `400 Bad Request` | `Suspicious activity detected` |
 | Body exceeds the cap | `413 Payload Too Large` | `Payload too large` |
 | Body read error or engine panic | `500 Internal Server Error` | `Security check failed` |
 

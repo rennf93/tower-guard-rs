@@ -580,7 +580,7 @@ mod tests {
             .body(Full::new(Bytes::new()))
             .expect("request");
         let response = service.oneshot(request).await.expect("response");
-        assert_eq!(response.status(), 403);
+        assert_eq!(response.status(), 400);
         assert_eq!(body_text(response).await, BLOCKED_MESSAGE);
     }
 
@@ -698,7 +698,7 @@ mod tests {
             .body(Full::new(Bytes::new()))
             .expect("request");
         let (status, body) = status_and_body(&layer, request).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
             body, BLOCKED_MESSAGE,
             "detection must still scan exempt IPs"
@@ -723,7 +723,7 @@ mod tests {
             .body(Full::new(Bytes::new()))
             .expect("request");
         let (status, body) = status_and_body(&layer, request).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body, BLOCKED_MESSAGE);
     }
 
@@ -968,7 +968,7 @@ mod tests {
         };
         // First violation: the plain block shape.
         let (status, body, _) = full_status(&layer, attack()).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body, BLOCKED_MESSAGE);
         // Second violation crosses the entry: banned on the spot.
         let (status, body, _) = full_status(&layer, attack()).await;
@@ -1005,7 +1005,7 @@ mod tests {
         };
         for _ in 0..3 {
             let (status, body, _) = full_status(&layer, attack()).await;
-            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(status, StatusCode::BAD_REQUEST);
             assert_eq!(
                 body, BLOCKED_MESSAGE,
                 "banning is off: the plain block shape"
@@ -1045,7 +1045,7 @@ mod tests {
         };
         for _ in 0..3 {
             let (status, body, _) = full_status(&layer, attack()).await;
-            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(status, StatusCode::BAD_REQUEST);
             assert_eq!(
                 body, BLOCKED_MESSAGE,
                 "exempt violations are not counted, so no ban can fire"
@@ -1125,7 +1125,7 @@ mod tests {
             .header("content-type", "application/x-www-form-urlencoded")
             .body(body_bytes(b"q=1+OR+1%3D1"))
             .expect("request");
-        assert_eq!(status_for(request).await, http::StatusCode::FORBIDDEN);
+        assert_eq!(status_for(request).await, http::StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -1138,7 +1138,7 @@ mod tests {
             .expect("request");
         assert_eq!(
             status_for(request).await,
-            http::StatusCode::FORBIDDEN,
+            http::StatusCode::BAD_REQUEST,
             "\\default in a form field must stay a recon probe"
         );
     }
@@ -1176,7 +1176,7 @@ mod tests {
             .header("content-type", "multipart/form-data; boundary=B0")
             .body(body_bytes(body.as_bytes()))
             .expect("request");
-        assert_eq!(status_for(request).await, http::StatusCode::FORBIDDEN);
+        assert_eq!(status_for(request).await, http::StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -1197,7 +1197,7 @@ mod tests {
             .expect("request");
         assert_eq!(
             status_for(request).await,
-            http::StatusCode::FORBIDDEN,
+            http::StatusCode::BAD_REQUEST,
             "the intact script island must detect"
         );
     }
@@ -1211,7 +1211,7 @@ mod tests {
             .header("content-type", "application/x-www-form-urlencoded")
             .body(body_bytes(body.as_bytes()))
             .expect("request");
-        assert_eq!(status_for(request).await, http::StatusCode::FORBIDDEN);
+        assert_eq!(status_for(request).await, http::StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -1222,7 +1222,7 @@ mod tests {
             .header("content-type", "application/json")
             .body(body_bytes(br#"{"$where": "1 OR 1=1"}"#))
             .expect("request");
-        assert_eq!(status_for(request).await, http::StatusCode::FORBIDDEN);
+        assert_eq!(status_for(request).await, http::StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

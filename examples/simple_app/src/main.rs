@@ -7,8 +7,8 @@
 //! |---|---|---|
 //! | `GET /health` | excluded | `200 ok`, served before the guard |
 //! | `GET /` | guarded | `200` greeting |
-//! | `GET /search?q=...` | guarded | `200`, or `403` when the query trips the engine |
-//! | `POST /echo` | guarded | echoes the body, or `403`/`413` from the guard |
+//! | `GET /search?q=...` | guarded | `200`, or `400` when the query trips the engine |
+//! | `POST /echo` | guarded | echoes the body, or `400`/`413` from the guard |
 //!
 //! The `/health` branch runs before the guard, mirroring the excluded-path
 //! behavior the Python distro's pipeline provides for configured paths: the

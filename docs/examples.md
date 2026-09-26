@@ -17,8 +17,8 @@ A minimal guarded service served over hyper
 |---|---|---|
 | `GET /health` | excluded | `200 ok`, served before the guard |
 | `GET /` | guarded | `200` greeting |
-| `GET /search?q=...` | guarded | `200`, or `403` when the query trips the engine |
-| `POST /echo` | guarded | echoes the body, or `403`/`413` from the guard |
+| `GET /search?q=...` | guarded | `200`, or `400` when the query trips the engine |
+| `POST /echo` | guarded | echoes the body, or `400`/`413` from the guard |
 
 The `/health` branch runs before the guard, mirroring the excluded-path
 behavior of the Python distro's pipeline: the adapter itself scans every
@@ -59,8 +59,8 @@ configuration, and `GET /health` is answered in front of both guards.
 |---|---|---|
 | `GET /health` | excluded | `200 ok` |
 | `GET /` | general | `200`, greeting text |
-| `GET /search?q=...` | general | `200`, or `403` on a threat |
-| `POST /echo` | general | echoes the body; `403`/`413` from the guard |
+| `GET /search?q=...` | general | `200`, or `400` on a threat |
+| `POST /echo` | general | echoes the body; `400`/`413` from the guard |
 | `GET /admin/stats` | stricter admin guard | screened by a second `GuardLayer` with a lower threat-score threshold |
 
 Run it directly or with the provided Docker setup:
