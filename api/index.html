@@ -881,7 +881,7 @@ known-friendly automation (monitoring probes, VPN egress, a partner's
 server), not immunity: it sets the same skip state a whitelist match sets but
 never adds a deny path, and it never opens the whitelist gate. The blacklist,
 route rules, and detection still apply to exempt IPs - an attack payload from
-an exempt IP is still <code>403 Suspicious activity detected</code>. The Rust family
+an exempt IP is still <code>400 Suspicious activity detected</code>. The Rust family
 ships no rate limiter, user-agent filter, cloud-provider blocker, or
 violation counter yet; a stage that lands later must skip exactly what the
 reference skips for a whitelist match (<code>is_whitelisted || is_exempt</code>) and
@@ -902,8 +902,8 @@ appears in the service's <code>Response</code> association:</p>
 <span class="p">}</span>
 </code></pre></div>
 <p>Either the inner service's response body, forwarded untouched (<code>Passthrough</code>),
-or a Guard-generated plain-text body for a short-circuited response (<code>403</code>,
-<code>413</code>, or <code>500</code>, <code>Generated</code>). It implements <code>http_body::Body</code>.</p>
+or a Guard-generated plain-text body for a short-circuited response (<code>400</code>,
+<code>403</code>, <code>413</code>, <code>429</code>, or <code>500</code>, <code>Generated</code>). It implements <code>http_body::Body</code>.</p>
 <h3 id="boxerror"><code>BoxError</code></h3>
 <p><code>Box&lt;dyn Error + Send + Sync&gt;</code>, the boxed error type used by <code>GuardBody</code>.
 Identical to <code>tower::BoxError</code>; redefined so the body type does not force a
@@ -1031,7 +1031,7 @@ Identical to <code>tower::BoxError</code>; redefined so the body type does not f
 </tr>
 <tr>
 <td>Engine flags a view</td>
-<td><code>403 Forbidden</code></td>
+<td><code>400 Bad Request</code></td>
 <td><code>Suspicious activity detected</code></td>
 </tr>
 <tr>

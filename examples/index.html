@@ -570,12 +570,12 @@ checkout (see the repository README).</p>
 <tr>
 <td><code>GET /search?q=...</code></td>
 <td>guarded</td>
-<td><code>200</code>, or <code>403</code> when the query trips the engine</td>
+<td><code>200</code>, or <code>400</code> when the query trips the engine</td>
 </tr>
 <tr>
 <td><code>POST /echo</code></td>
 <td>guarded</td>
-<td>echoes the body, or <code>403</code>/<code>413</code> from the guard</td>
+<td>echoes the body, or <code>400</code>/<code>413</code> from the guard</td>
 </tr>
 </tbody>
 </table>
@@ -668,12 +668,12 @@ configuration, and <code>GET /health</code> is answered in front of both guards.
 <tr>
 <td><code>GET /search?q=...</code></td>
 <td>general</td>
-<td><code>200</code>, or <code>403</code> on a threat</td>
+<td><code>200</code>, or <code>400</code> on a threat</td>
 </tr>
 <tr>
 <td><code>POST /echo</code></td>
 <td>general</td>
-<td>echoes the body; <code>403</code>/<code>413</code> from the guard</td>
+<td>echoes the body; <code>400</code>/<code>413</code> from the guard</td>
 </tr>
 <tr>
 <td><code>GET /admin/stats</code></td>
