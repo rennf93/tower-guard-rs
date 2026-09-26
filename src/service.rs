@@ -1,15 +1,17 @@
 //! The middleware service: body buffering, view scanning, dispatching.
 
+use crate::GuardClientIp;
 use crate::GuardLayer;
 use crate::body::{BoxError, GuardBody};
 use crate::response;
 use bytes::{Bytes, BytesMut};
 use guard_core_engine::body_scan::extract_body_scan_values;
+use guard_core_engine::ip_gate::IpGateVerdict;
 use http::header::CONTENT_TYPE;
 use http::request::Parts;
 use http::{Request, Response};
 use http_body::Body;
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, Full};
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
@@ -111,7 +113,14 @@ where
         let mut inner = self.inner.clone();
         let layer = self.layer.clone();
         Box::pin(async move {
-            let (parts, mut body) = request.into_parts();
+            let (mut parts, mut body) = request.into_parts();
+
+            // The IP gate runs before anything else: a denied IP must not
+            // cost a body buffer, and detection still scans whatever passes.
+            if let Some(denial) = enforce_ip_gate(&mut parts, &layer) {
+                return Ok(denial.map(GuardBody::Generated));
+            }
+
             let buffered = match buffer_body(&mut body, layer.body_cap()).await {
                 Ok(buffered) => buffered,
                 Err(BufferFailure::TooLarge) => {
@@ -131,6 +140,27 @@ where
                 ScanOutcome::Failed => Ok(response::failure().map(GuardBody::Generated)),
             }
         })
+    }
+}
+
+/// Apply the configured IP gate to the request parts.
+///
+/// Returns the `403 Forbidden` response when the gate denies the request IP.
+/// A passed request gets the gate's [`IpGateDecision`] inserted into the
+/// request extensions (the family-local skip state, the equivalent of the
+/// reference engine's `state.is_whitelisted` / `state.is_exempt`) so
+/// downstream handlers can read it. Without a gate or without a
+/// [`GuardClientIp`] extension the request is not attributed: the gate does
+/// not run, and nothing is inserted.
+fn enforce_ip_gate(parts: &mut Parts, layer: &GuardLayer) -> Option<Response<Full<Bytes>>> {
+    let gate = layer.ip_gate()?;
+    let GuardClientIp(ip) = parts.extensions.get::<GuardClientIp>()?;
+    match gate.evaluate(*ip) {
+        IpGateVerdict::Allowed(decision) => {
+            parts.extensions.insert(decision);
+            None
+        }
+        IpGateVerdict::Denied(_) => Some(response::forbidden()),
     }
 }
 
@@ -255,14 +285,87 @@ fn is_excluded_header(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BLOCKED_MESSAGE, FAILURE_MESSAGE, default_config};
+    use crate::{
+        BLOCKED_MESSAGE, FAILURE_MESSAGE, FORBIDDEN_MESSAGE, GuardClientIp, IpGateConfig,
+        default_config,
+    };
     use guard_core_engine::detect::{DetectConfig, DetectVerdict};
+    use guard_core_engine::ip_gate::IpGateDecision;
+    use http::StatusCode;
     use http_body_util::Full;
     use std::convert::Infallible;
+    use std::net::IpAddr;
+    use std::str::FromStr;
     use tower::{Layer, ServiceExt};
-
     fn panicking_detect(_content: &str, _context: &str, _config: &DetectConfig) -> DetectVerdict {
         panic!("engine exploded");
+    }
+
+    fn gate_ip(text: &str) -> GuardClientIp {
+        GuardClientIp(IpAddr::from_str(text).expect("test address"))
+    }
+
+    /// The empty list, typed so the `new` calls stay inferable.
+    const NIL: [&str; 0] = [];
+
+    /// The checklist gate: a blacklisted exact IP and a blacklisted /24
+    /// (192.0.2.x), an exempt exact IP and an exempt /28 (198.51.100.x), all
+    /// disjoint.
+    fn checklist_gate() -> IpGateConfig {
+        IpGateConfig::new(
+            [] as [&str; 0],
+            ["203.0.113.9", "192.0.2.0/24"],
+            ["198.51.100.7", "198.51.100.16/28"],
+        )
+        .expect("valid lists")
+    }
+
+    /// A guarded service whose `200` body reports the skip state the
+    /// downstream handler sees in its request extensions.
+    fn guarded(
+        layer: &GuardLayer,
+    ) -> impl Service<
+        Request<Full<Bytes>>,
+        Response = http::Response<crate::GuardBody<Full<Bytes>>>,
+        Error = Infallible,
+    > {
+        layer.layer(tower::service_fn(
+            |request: Request<Full<Bytes>>| async move {
+                let verdict = match request.extensions().get::<IpGateDecision>().copied() {
+                    Some(decision) => {
+                        format!(
+                            "gate=on wh={} ex={}",
+                            decision.is_whitelisted, decision.is_exempt
+                        )
+                    }
+                    None => "gate=off".to_owned(),
+                };
+                Ok::<_, Infallible>(http::Response::new(Full::new(Bytes::from(verdict))))
+            },
+        ))
+    }
+
+    async fn status_and_body(
+        layer: &GuardLayer,
+        request: Request<Full<Bytes>>,
+    ) -> (StatusCode, String) {
+        let response = guarded(layer).oneshot(request).await.expect("response");
+        let status = response.status();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn benign_request(ip: &str) -> Request<Full<Bytes>> {
+        Request::builder()
+            .uri("/hello")
+            .extension(gate_ip(ip))
+            .body(Full::new(Bytes::new()))
+            .expect("request")
     }
 
     async fn body_text(response: Response<GuardBody<Full<Bytes>>>) -> String {
@@ -355,6 +458,156 @@ mod tests {
         for name in ["cookie", "authorization", "content-type", "x-api-key"] {
             assert!(!is_excluded_header(name), "{name} should be scanned");
         }
+    }
+
+    // --- the global IP gate (exempt_ips contract checklist) ---
+
+    #[tokio::test]
+    async fn blacklisted_ip_is_denied_with_the_forbidden_body() {
+        let (status, body) = status_and_body(
+            &GuardLayer::new(default_config()).with_ip_gate(checklist_gate()),
+            benign_request("203.0.113.9"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, FORBIDDEN_MESSAGE);
+
+        // The blacklisted /24 denies its whole range.
+        let (status, body) = status_and_body(
+            &GuardLayer::new(default_config()).with_ip_gate(checklist_gate()),
+            benign_request("192.0.2.77"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, FORBIDDEN_MESSAGE);
+    }
+
+    #[tokio::test]
+    async fn exempt_exact_and_cidr_ips_pass_with_the_skip_state_set() {
+        // Checklist: exemption is observable behavior for the exact entry and
+        // the CIDR member alike; the Rust family has no rate limiter yet, so
+        // "skips rate limiting" is pinned at the flag level the contract
+        // defines (the same state a whitelist match sets).
+        let layer = GuardLayer::new(default_config()).with_ip_gate(checklist_gate());
+        let (status, body) = status_and_body(&layer, benign_request("198.51.100.7")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "gate=on wh=false ex=true");
+
+        let (status, body) = status_and_body(&layer, benign_request("198.51.100.20")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "gate=on wh=false ex=true");
+    }
+
+    #[tokio::test]
+    async fn exempt_ip_on_the_blacklist_is_still_denied() {
+        let gate = IpGateConfig::new(NIL, ["198.51.100.7"], ["198.51.100.7"]).expect("valid lists");
+        let (status, body) = status_and_body(
+            &GuardLayer::new(default_config()).with_ip_gate(gate),
+            benign_request("198.51.100.7"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, FORBIDDEN_MESSAGE);
+    }
+
+    #[tokio::test]
+    async fn exemption_never_opens_a_restrictive_whitelist() {
+        let gate = IpGateConfig::new(["192.0.2.1"], NIL, ["198.51.100.7"]).expect("valid lists");
+        let layer = GuardLayer::new(default_config()).with_ip_gate(gate);
+        let (status, body) = status_and_body(&layer, benign_request("198.51.100.7")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, FORBIDDEN_MESSAGE);
+
+        // An exempt-only config adds no deny path of its own: with the
+        // whitelist empty, every IP passes, exempt or not.
+        let exempt_only = IpGateConfig::new(NIL, NIL, ["198.51.100.7"]).expect("valid lists");
+        let (status, body) = status_and_body(
+            &GuardLayer::new(default_config()).with_ip_gate(exempt_only),
+            benign_request("192.0.2.8"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "gate=on wh=false ex=false");
+    }
+
+    #[tokio::test]
+    async fn whitelist_match_sets_both_flags_and_exemption_follows_the_list() {
+        let gate = IpGateConfig::new(["198.51.100.7", "198.51.100.30"], NIL, ["198.51.100.7"])
+            .expect("valid lists");
+        let layer = GuardLayer::new(default_config()).with_ip_gate(gate);
+        let (status, body) = status_and_body(&layer, benign_request("198.51.100.7")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "gate=on wh=true ex=true");
+
+        // A whitelist member outside exempt_ips: plain whitelist skip state.
+        let (status, body) = status_and_body(&layer, benign_request("198.51.100.30")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "gate=on wh=true ex=false");
+    }
+
+    #[tokio::test]
+    async fn an_attack_from_an_exempt_ip_is_still_blocked_by_detection() {
+        // Checklist: penetration detection still applies to exempt IPs.
+        let layer = GuardLayer::new(default_config()).with_ip_gate(checklist_gate());
+        let request = Request::builder()
+            .uri("/files/../../etc/passwd")
+            .extension(gate_ip("198.51.100.7"))
+            .body(Full::new(Bytes::new()))
+            .expect("request");
+        let (status, body) = status_and_body(&layer, request).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            body, BLOCKED_MESSAGE,
+            "detection must still scan exempt IPs"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_client_ip_extension_the_gate_is_inert_and_detection_still_applies() {
+        let layer = GuardLayer::new(default_config()).with_ip_gate(checklist_gate());
+        // Not attributed: the gate cannot run, and the request flows on.
+        let request = Request::builder()
+            .uri("/hello")
+            .body(Full::new(Bytes::new()))
+            .expect("request");
+        let (status, body) = status_and_body(&layer, request).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "gate=off");
+
+        // Not attributed does not mean unscreened: detection still scans.
+        let request = Request::builder()
+            .uri("/files/../../etc/passwd")
+            .body(Full::new(Bytes::new()))
+            .expect("request");
+        let (status, body) = status_and_body(&layer, request).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, BLOCKED_MESSAGE);
+    }
+
+    #[tokio::test]
+    async fn invalid_exempt_entry_fails_closed_at_config_time() {
+        let error = IpGateConfig::new(NIL, NIL, ["not-an-ip"]).unwrap_err();
+        assert_eq!(error.list, "exempt_ips");
+        assert_eq!(error.entry, "not-an-ip");
+    }
+
+    #[test]
+    fn ipv4_mapped_request_matches_v4_entries_at_the_gate() {
+        // Checklist: IPv4-mapped parity. std parses the mapped form as an
+        // IPv6 address; the gate must still match it against v4 entries
+        // exactly as the whitelist matcher does.
+        let mapped = IpAddr::from_str("::ffff:198.51.100.7").expect("mapped address");
+        let gate = IpGateConfig::new(["198.51.100.0/24"], NIL, ["198.51.100.7"]).expect("lists");
+        assert!(
+            matches!(gate.evaluate(mapped), IpGateVerdict::Allowed(decision) if decision.is_exempt)
+        );
+        assert!(matches!(
+            gate.evaluate(mapped),
+            IpGateVerdict::Allowed(IpGateDecision {
+                is_whitelisted: true,
+                ..
+            })
+        ));
     }
 
     // --- body-value extraction through the full service ---

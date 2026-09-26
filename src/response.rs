@@ -8,6 +8,9 @@ use http_body_util::Full;
 /// Detail message carried by the `403 Forbidden` block response.
 pub const BLOCKED_MESSAGE: &str = "Suspicious activity detected";
 
+/// Detail message carried by the IP gate's `403 Forbidden` response.
+pub const FORBIDDEN_MESSAGE: &str = "Forbidden";
+
 /// Detail message carried by the `413 Payload Too Large` response.
 pub const OVERSIZE_MESSAGE: &str = "Payload too large";
 
@@ -16,6 +19,10 @@ pub const FAILURE_MESSAGE: &str = "Security check failed";
 
 pub(crate) fn blocked() -> Response<Full<Bytes>> {
     plain_text(StatusCode::FORBIDDEN, BLOCKED_MESSAGE)
+}
+
+pub(crate) fn forbidden() -> Response<Full<Bytes>> {
+    plain_text(StatusCode::FORBIDDEN, FORBIDDEN_MESSAGE)
 }
 
 pub(crate) fn oversize() -> Response<Full<Bytes>> {
@@ -58,6 +65,17 @@ mod tests {
             "text/plain; charset=utf-8"
         );
         assert_eq!(body_bytes(response.into_body()).await, BLOCKED_MESSAGE);
+    }
+
+    #[tokio::test]
+    async fn forbidden_response_shape() {
+        let response = forbidden();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).expect("content type"),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(body_bytes(response.into_body()).await, FORBIDDEN_MESSAGE);
     }
 
     #[tokio::test]
