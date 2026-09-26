@@ -16,8 +16,8 @@ pub type BoxError = Box<dyn Error + Send + Sync>;
 /// Response body produced by [`GuardService`](crate::GuardService).
 ///
 /// Either the inner service's response body, forwarded untouched, or a
-/// Guard-generated body for a short-circuited response (`403`, `413`, or
-/// `500`). This type is nameable because it appears in
+/// Guard-generated body for a short-circuited response (`400`, `403`, `413`,
+/// `429`, or `500`). This type is nameable because it appears in
 /// `<GuardService<S> as Service<Request<B>>>::Response`.
 #[derive(Debug)]
 pub enum GuardBody<B> {

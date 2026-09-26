@@ -53,7 +53,7 @@ async fn main() {
 ```
 
 A request with a malicious query string, for example
-`/files/../../etc/passwd`, is blocked with `403 Forbidden` and a
+`/files/../../etc/passwd`, is blocked with `400 Bad Request` and a
 `Suspicious activity detected` body.
 
 ## Building from source
